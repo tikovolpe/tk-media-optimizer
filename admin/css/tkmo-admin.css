@@ -119,6 +119,28 @@
 	color: #d63638;
 }
 
+.tkmo-savings {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+	background: #edfaf1;
+	border: 1px solid #b7e4c7;
+	border-radius: 6px;
+	padding: 10px 16px;
+	margin: 0 0 8px;
+}
+
+.tkmo-savings-label {
+	font-size: 13px;
+	color: #1d2327;
+}
+
+.tkmo-savings-value {
+	font-size: 18px;
+	font-weight: 700;
+	color: #00843d;
+}
+
 .tkmo-progress-wrap {
 	max-width: 600px;
 }
@@ -135,4 +157,53 @@
 	height: 100%;
 	width: 0%;
 	transition: width 0.3s ease;
+}
+
+.tkmo-table-title {
+	margin-top: 28px;
+}
+
+.tkmo-table {
+	max-width: 900px;
+}
+
+.tkmo-table th {
+	font-weight: 600;
+}
+
+.tkmo-col-converted,
+.tkmo-col-pending,
+.tkmo-col-errors {
+	width: 130px;
+	text-align: center;
+}
+
+.tkmo-badge {
+	display: inline-block;
+	min-width: 44px;
+	padding: 2px 10px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.6;
+}
+
+.tkmo-badge-converted {
+	background: #d6f5e3;
+	color: #00843d;
+}
+
+.tkmo-badge-pending {
+	background: #fdf3d8;
+	color: #8a6d0b;
+}
+
+.tkmo-badge-errors {
+	background: #fbe0e0;
+	color: #b32d2e;
+}
+
+.tkmo-table-empty td {
+	color: #646970;
+	font-style: italic;
 }
