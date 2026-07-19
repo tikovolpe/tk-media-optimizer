@@ -45,9 +45,9 @@ class TKMO_Hooks {
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'attach_webp_meta' ), 10, 2 );
 		add_action( 'delete_attachment', array( $this, 'delete_webp_file' ) );
 
-		add_filter( 'wp_get_attachment_url', array( $this, 'filter_attachment_url' ), 10, 2 );
-		add_filter( 'wp_calculate_image_srcset', array( $this, 'filter_image_srcset' ), 10, 5 );
-		add_filter( 'wp_get_attachment_image_src', array( $this, 'filter_attachment_image_src' ), 10, 4 );
+		// WebP delivery via <picture> wrapping (cache-safe, no Accept header).
+		add_filter( 'wp_content_img_tag', array( $this, 'wrap_content_img' ), 20, 3 );
+		add_filter( 'wp_get_attachment_image', array( $this, 'wrap_attachment_image' ), 20, 5 );
 	}
 
 	/**
@@ -223,147 +223,226 @@ class TKMO_Hooks {
 	}
 
 	/**
-	 * Checks whether the requesting browser sent Accept: image/webp.
+	 * Wraps content images (the_content, blocks, etc.) in a <picture> with a
+	 * WebP <source>. Fires on wp_content_img_tag (WP 6.0+).
 	 *
-	 * @return bool
-	 */
-	private function browser_accepts_webp() {
-		if ( empty( $_SERVER['HTTP_ACCEPT'] ) ) {
-			return false;
-		}
-
-		$accept = sanitize_text_field( wp_unslash( $_SERVER['HTTP_ACCEPT'] ) );
-
-		return false !== strpos( $accept, 'image/webp' );
-	}
-
-	/**
-	 * Swaps a JPG/PNG URL for its .webp counterpart when the file exists on
-	 * disk and the current browser accepts WebP. Returns the original URL
-	 * untouched in every other case.
-	 *
-	 * WordPress thumbnails carry a size suffix in the filename
-	 * (e.g. foto-960x720.png). Since TKMO_Converter only ever generates a
-	 * .webp for the full-size original, this tries the exact filename
-	 * first (foto-960x720.webp) and, if that is not found, strips the
-	 * -{width}x{height} suffix and tries the original's .webp (foto.webp).
-	 *
-	 * @param string $url URL of the original (JPG/PNG) image.
+	 * @param string $filtered_image The <img> tag HTML.
+	 * @param string $context        Optional context (unused).
+	 * @param int    $attachment_id  Optional attachment ID (unused).
 	 * @return string
 	 */
-	private function maybe_get_webp_url( $url ) {
-		if ( empty( $url ) || ! $this->browser_accepts_webp() ) {
-			return $url;
-		}
+	public function wrap_content_img( $filtered_image, $context = '', $attachment_id = 0 ) {
+		unset( $context, $attachment_id );
 
-		$extension = strtolower( pathinfo( $url, PATHINFO_EXTENSION ) );
-
-		if ( ! in_array( $extension, array( 'jpg', 'jpeg', 'png' ), true ) ) {
-			return $url;
-		}
-
-		$upload_dir = wp_get_upload_dir();
-
-		if ( 0 !== strpos( $url, $upload_dir['baseurl'] ) ) {
-			return $url;
-		}
-
-		$relative_path = substr( $url, strlen( $upload_dir['baseurl'] ) );
-		$file_path     = $upload_dir['basedir'] . $relative_path;
-		$path_info     = pathinfo( $file_path );
-
-		if ( empty( $path_info['dirname'] ) || empty( $path_info['filename'] ) ) {
-			return $url;
-		}
-
-		$url_path_info = pathinfo( $url );
-
-		if ( empty( $url_path_info['dirname'] ) || empty( $url_path_info['filename'] ) ) {
-			return $url;
-		}
-
-		// 1) Exact filename, extension swapped: foto-960x720.webp.
-		$webp_path = trailingslashit( $path_info['dirname'] ) . $path_info['filename'] . '.webp';
-
-		if ( file_exists( $webp_path ) ) {
-			return trailingslashit( $url_path_info['dirname'] ) . $url_path_info['filename'] . '.webp';
-		}
-
-		// 2) Strip the -{width}x{height} size suffix and try the original's webp: foto.webp.
-		$base_filename = preg_replace( '/-\d+x\d+$/', '', $path_info['filename'] );
-
-		if ( $base_filename === $path_info['filename'] ) {
-			return $url;
-		}
-
-		$webp_path = trailingslashit( $path_info['dirname'] ) . $base_filename . '.webp';
-
-		if ( ! file_exists( $webp_path ) ) {
-			return $url;
-		}
-
-		$url_base_filename = preg_replace( '/-\d+x\d+$/', '', $url_path_info['filename'] );
-
-		return trailingslashit( $url_path_info['dirname'] ) . $url_base_filename . '.webp';
+		return $this->maybe_wrap_picture( $filtered_image );
 	}
 
 	/**
-	 * Filters wp_get_attachment_url() to serve WebP when available.
+	 * Wraps the output of wp_get_attachment_image() (themes, widgets, blocks)
+	 * in a <picture> with a WebP <source>.
 	 *
-	 * @param string $url           Attachment URL.
-	 * @param int    $attachment_id Attachment post ID.
+	 * @param string       $html          The <img> tag HTML.
+	 * @param int          $attachment_id Attachment ID (unused).
+	 * @param string|int[] $size          Requested size (unused).
+	 * @param bool         $icon          Whether treated as icon (unused).
+	 * @param array        $attr          Image attributes (unused).
 	 * @return string
 	 */
-	public function filter_attachment_url( $url, $attachment_id ) {
-		unset( $attachment_id );
+	public function wrap_attachment_image( $html, $attachment_id = 0, $size = '', $icon = false, $attr = array() ) {
+		unset( $attachment_id, $size, $icon, $attr );
 
-		return $this->maybe_get_webp_url( $url );
+		return $this->maybe_wrap_picture( $html );
 	}
 
 	/**
-	 * Filters wp_calculate_image_srcset() to serve WebP URLs when available.
+	 * Wraps a single <img> tag in a <picture> element that offers a WebP
+	 * <source> ahead of the original <img> fallback.
 	 *
-	 * @param array  $sources       One or more arrays of source data.
-	 * @param array  $size_array    Width/height of the image.
-	 * @param string $image_src     The 'src' of the image.
-	 * @param array  $image_meta    The attachment meta data.
-	 * @param int    $attachment_id Attachment post ID.
-	 * @return array
+	 * Delivery no longer depends on the request's Accept header: the markup
+	 * is identical for every visitor, so it survives full-page caches
+	 * (W3TC, etc.). The browser itself picks the <source> when it supports
+	 * WebP and falls back to the untouched <img> otherwise.
+	 *
+	 * Returns the input unchanged when there is nothing to offer:
+	 *  - no <img> tag present;
+	 *  - the img is already inside a <picture>;
+	 *  - opted out via the data-tkmo-skip attribute or a class;
+	 *  - no WebP file exists on disk for any candidate URL.
+	 *
+	 * The original <img> is preserved byte-for-byte, so every attribute
+	 * (class, alt, width, height, loading, sizes, fetchpriority, decoding,
+	 * srcset) stays intact and CLS / lazy-loading behaviour is unchanged.
+	 *
+	 * @param string $html Markup containing exactly one <img> tag.
+	 * @return string
 	 */
-	public function filter_image_srcset( $sources, $size_array, $image_src, $image_meta, $attachment_id ) {
-		unset( $size_array, $image_src, $image_meta, $attachment_id );
-
-		if ( empty( $sources ) || ! is_array( $sources ) ) {
-			return $sources;
+	private function maybe_wrap_picture( $html ) {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return $html;
 		}
 
-		foreach ( $sources as $width => $source ) {
-			if ( ! empty( $source['url'] ) ) {
-				$sources[ $width ]['url'] = $this->maybe_get_webp_url( $source['url'] );
+		// Already a <picture> (or CSS background markup with none): leave it.
+		if ( false !== stripos( $html, '<picture' ) ) {
+			return $html;
+		}
+
+		if ( ! preg_match( '/<img\s[^>]*>/i', $html, $matches ) ) {
+			return $html;
+		}
+
+		$img = $matches[0];
+
+		// Explicit opt-out.
+		if ( false !== stripos( $img, 'data-tkmo-skip' ) || false !== stripos( $img, 'tkmo-no-webp' ) ) {
+			return $html;
+		}
+
+		$src    = $this->get_img_attr( $img, 'src' );
+		$srcset = $this->get_img_attr( $img, 'srcset' );
+		$sizes  = $this->get_img_attr( $img, 'sizes' );
+
+		$webp_srcset = '';
+
+		if ( '' !== $srcset ) {
+			$webp_srcset = $this->build_webp_srcset( $srcset );
+		}
+
+		// No srcset (or none of its candidates had a webp): try the src.
+		if ( '' === $webp_srcset && '' !== $src ) {
+			$webp_src = $this->url_to_webp_if_exists( $src );
+
+			if ( false !== $webp_src ) {
+				$webp_srcset = $webp_src;
 			}
 		}
 
-		return $sources;
+		if ( '' === $webp_srcset ) {
+			return $html;
+		}
+
+		$source = '<source type="image/webp" srcset="' . esc_attr( $webp_srcset ) . '"';
+
+		if ( '' !== $sizes ) {
+			$source .= ' sizes="' . esc_attr( $sizes ) . '"';
+		}
+
+		$source .= ' />';
+
+		$picture = '<picture>' . $source . $img . '</picture>';
+
+		// Replace only the matched <img>, preserving any surrounding markup
+		// (e.g. an anchor wrapping the image in content).
+		$pos = strpos( $html, $img );
+
+		if ( false === $pos ) {
+			return $html;
+		}
+
+		return substr( $html, 0, $pos ) . $picture . substr( $html, $pos + strlen( $img ) );
 	}
 
 	/**
-	 * Filters wp_get_attachment_image_src() to serve WebP when available.
+	 * Extracts a single attribute value from an <img> tag. Supports both
+	 * double- and single-quoted values.
 	 *
-	 * @param array|false $image         Array of image data (url, width, height, is_intermediate), or false.
-	 * @param int         $attachment_id Attachment post ID.
-	 * @param string|int[] $size         Requested image size.
-	 * @param bool        $icon          Whether the image should be treated as an icon.
-	 * @return array|false
+	 * @param string $img  The <img> tag HTML.
+	 * @param string $name Attribute name.
+	 * @return string Attribute value, or '' when absent.
 	 */
-	public function filter_attachment_image_src( $image, $attachment_id, $size, $icon ) {
-		unset( $attachment_id, $size, $icon );
+	private function get_img_attr( $img, $name ) {
+		$pattern = '/\s' . preg_quote( $name, '/' ) . '\s*=\s*("([^"]*)"|\'([^\']*)\')/i';
 
-		if ( empty( $image ) || ! is_array( $image ) || empty( $image[0] ) ) {
-			return $image;
+		if ( ! preg_match( $pattern, $img, $matches ) ) {
+			return '';
 		}
 
-		$image[0] = $this->maybe_get_webp_url( $image[0] );
+		if ( isset( $matches[2] ) && '' !== $matches[2] ) {
+			return $matches[2];
+		}
 
-		return $image;
+		return isset( $matches[3] ) ? $matches[3] : '';
+	}
+
+	/**
+	 * Rebuilds a srcset string keeping only the candidates whose .webp
+	 * sibling exists on disk, swapping each URL for its .webp counterpart
+	 * and preserving the width/pixel descriptor.
+	 *
+	 * @param string $srcset Original srcset attribute value.
+	 * @return string WebP srcset, or '' when no candidate has a webp file.
+	 */
+	private function build_webp_srcset( $srcset ) {
+		$candidates = explode( ',', $srcset );
+		$out        = array();
+
+		foreach ( $candidates as $candidate ) {
+			$candidate = trim( $candidate );
+
+			if ( '' === $candidate ) {
+				continue;
+			}
+
+			$parts      = preg_split( '/\s+/', $candidate, 2 );
+			$url        = $parts[0];
+			$descriptor = isset( $parts[1] ) ? ' ' . $parts[1] : '';
+
+			$webp_url = $this->url_to_webp_if_exists( $url );
+
+			if ( false !== $webp_url ) {
+				$out[] = $webp_url . $descriptor;
+			}
+		}
+
+		return implode( ', ', $out );
+	}
+
+	/**
+	 * Maps an image URL to its .webp URL, but only when the corresponding
+	 * .webp file actually exists on disk under the uploads directory.
+	 *
+	 * @param string $url Original (PNG/JPG/JPEG) image URL.
+	 * @return string|false WebP URL, or false when unavailable.
+	 */
+	private function url_to_webp_if_exists( $url ) {
+		if ( '' === $url ) {
+			return false;
+		}
+
+		$decoded   = html_entity_decode( $url, ENT_QUOTES );
+		$url_path  = wp_parse_url( $decoded, PHP_URL_PATH );
+
+		if ( empty( $url_path ) ) {
+			return false;
+		}
+
+		$extension = strtolower( pathinfo( $url_path, PATHINFO_EXTENSION ) );
+
+		if ( ! in_array( $extension, array( 'jpg', 'jpeg', 'png' ), true ) ) {
+			return false;
+		}
+
+		$upload_dir = wp_get_upload_dir();
+		$baseurl    = $upload_dir['baseurl'];
+
+		if ( 0 !== strpos( $decoded, $baseurl ) ) {
+			return false;
+		}
+
+		$relative  = substr( $decoded, strlen( $baseurl ) );
+		$file_path = wp_normalize_path( $upload_dir['basedir'] . $relative );
+		$path_info = pathinfo( $file_path );
+
+		if ( empty( $path_info['dirname'] ) || empty( $path_info['filename'] ) ) {
+			return false;
+		}
+
+		$webp_path = trailingslashit( $path_info['dirname'] ) . $path_info['filename'] . '.webp';
+
+		if ( ! file_exists( $webp_path ) ) {
+			return false;
+		}
+
+		// Swap the extension on the original URL string (keeps its encoding).
+		return preg_replace( '/\.(png|jpe?g)$/i', '.webp', $url );
 	}
 }

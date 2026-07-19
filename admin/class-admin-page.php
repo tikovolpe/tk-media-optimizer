@@ -251,9 +251,9 @@ class TKMO_Admin_Page {
 			$webp_path = self::webp_path_for( $path );
 
 			if ( file_exists( $webp_path ) ) {
-				$status                    = 'converted';
-				$stats['original_bytes']  += (int) $file->getSize();
-				$stats['webp_bytes']      += (int) self::safe_filesize( $webp_path );
+				$status                   = 'converted';
+				$stats['original_bytes'] += (int) $file->getSize();
+				$stats['webp_bytes']     += (int) self::safe_filesize( $webp_path );
 			} elseif ( isset( $error_map[ $path ] ) ) {
 				$status = 'errors';
 			} else {
@@ -535,10 +535,10 @@ class TKMO_Admin_Page {
 			return;
 		}
 
-		$stats        = self::scan_disk( true );
-		$has_backend  = TKMO_Converter::has_available_backend();
-		$saved_human  = size_format( $stats['saved_bytes'], 1 );
-		$saved_human  = $saved_human ? $saved_human : '0 B';
+		$stats       = self::scan_disk( true );
+		$has_backend = TKMO_Converter::has_available_backend();
+		$saved_human = size_format( $stats['saved_bytes'], 1 );
+		$saved_human = $saved_human ? $saved_human : '0 B';
 		?>
 		<div class="wrap tkmo-admin-wrap">
 			<h1><?php echo esc_html__( 'TK Media Optimizer', 'tk-media-optimizer' ); ?></h1>
