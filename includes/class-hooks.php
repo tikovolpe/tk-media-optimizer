@@ -48,6 +48,12 @@ class TKMO_Hooks {
 		// WebP delivery via <picture> wrapping (cache-safe, no Accept header).
 		add_filter( 'wp_content_img_tag', array( $this, 'wrap_content_img' ), 20, 3 );
 		add_filter( 'wp_get_attachment_image', array( $this, 'wrap_attachment_image' ), 20, 5 );
+
+		// Catch-all: many themes build <img> markup by hand in template files
+		// (wp_get_attachment_image_url() + a manual <img>), which neither
+		// filter above ever sees. A frontend output buffer rewrites the whole
+		// rendered page so those images get wrapped too.
+		add_action( 'template_redirect', array( $this, 'start_output_buffer' ) );
 	}
 
 	/**
@@ -252,6 +258,87 @@ class TKMO_Hooks {
 		unset( $attachment_id, $size, $icon, $attr );
 
 		return $this->maybe_wrap_picture( $html );
+	}
+
+	/**
+	 * Starts a frontend-only output buffer whose callback rewrites the full
+	 * rendered page HTML. Fires on template_redirect, which only runs for
+	 * front-end page requests (not admin, and — with the guards below — not
+	 * feeds, REST or AJAX).
+	 *
+	 * @return void
+	 */
+	public function start_output_buffer() {
+		if ( is_admin() || is_feed() ) {
+			return;
+		}
+
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return;
+		}
+
+		if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+			return;
+		}
+
+		if ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) {
+			return;
+		}
+
+		ob_start( array( $this, 'process_page_html' ) );
+	}
+
+	/**
+	 * Output-buffer callback: wraps every eligible standalone <img> in the
+	 * page in a <picture> element, leaving images that are already inside a
+	 * <picture> untouched.
+	 *
+	 * @param string $html The full buffered page HTML.
+	 * @return string
+	 */
+	public function process_page_html( $html ) {
+		if ( ! is_string( $html ) || '' === $html || false === stripos( $html, '<img' ) ) {
+			return $html;
+		}
+
+		// Mask existing <picture> blocks so their inner <img> is never
+		// re-wrapped, then restore them verbatim afterwards.
+		$placeholders = array();
+
+		$masked = preg_replace_callback(
+			'/<picture\b.*?<\/picture>/is',
+			function ( $match ) use ( &$placeholders ) {
+				$key                  = '<!--tkmo-picture-' . count( $placeholders ) . '-->';
+				$placeholders[ $key ] = $match[0];
+
+				return $key;
+			},
+			$html
+		);
+
+		// preg_replace_callback returns null on failure (e.g. backtrack limit
+		// on a huge page); fall back to the untouched HTML in that case.
+		if ( null === $masked ) {
+			return $html;
+		}
+
+		$wrapped = preg_replace_callback(
+			'/<img\b[^>]*>/i',
+			function ( $match ) {
+				return $this->maybe_wrap_picture( $match[0] );
+			},
+			$masked
+		);
+
+		if ( null === $wrapped ) {
+			return $html;
+		}
+
+		if ( ! empty( $placeholders ) ) {
+			$wrapped = strtr( $wrapped, $placeholders );
+		}
+
+		return $wrapped;
 	}
 
 	/**
