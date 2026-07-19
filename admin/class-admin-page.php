@@ -258,6 +258,8 @@ class TKMO_Admin_Page {
 	public function ajax_convert_batch() {
 		$this->verify_ajax_request();
 
+		set_time_limit( 300 );
+
 		$converted = 0;
 		$errors    = 0;
 
@@ -330,48 +332,57 @@ class TKMO_Admin_Page {
 
 		$remaining = (int) $remaining_query->found_posts;
 
-		$extra_converted = 0;
-
-		if ( 0 === $remaining ) {
-			$extra_converted = $this->convert_orphan_files();
-		}
+		$orphan_result = $this->convert_orphan_files();
 
 		wp_send_json_success(
 			array(
-				'converted'       => $converted,
-				'errors'          => $errors,
-				'remaining'       => $remaining,
-				'extra_converted' => $extra_converted,
-				'done'            => 0 === $remaining,
-				'stats'           => self::get_stats(),
+				'attachments_converted' => $converted,
+				'errors'                => $errors,
+				'remaining'             => $remaining,
+				'orphans_found'         => $orphan_result['found'],
+				'orphans_converted'     => $orphan_result['converted'],
+				'orphans_failed'        => $orphan_result['failed'],
+				'total_converted'       => $converted + $orphan_result['converted'],
+				'done'                  => 0 === $remaining,
+				'stats'                 => self::get_stats(),
 			)
 		);
 	}
 
 	/**
-	 * Recursively scans the uploads directory for .png/.jpg/.jpeg files that
-	 * have no matching .webp on disk (mainly thumbnails, which have no
-	 * postmeta of their own and are therefore invisible to the attachment
-	 * query above) and converts them.
+	 * Recursively scans the entire uploads directory for .png/.jpg/.jpeg
+	 * files that have no matching .webp on disk (mainly thumbnails, which
+	 * have no postmeta of their own and are therefore invisible to the
+	 * attachment query above) and converts them.
 	 *
-	 * Runs only once the attachment batch is fully drained, so it is a
-	 * one-shot sweep rather than something repeated on every AJAX tick.
+	 * Runs on every AJAX tick, not just once $remaining hits zero: the
+	 * previous "only on the last tick" gate meant this whole-directory scan
+	 * had to complete inside a single request, which timed out and silently
+	 * dropped orphan files on large media libraries. Re-scanning each tick
+	 * is cheap (an already-converted file only costs one file_exists() stat)
+	 * and, combined with set_time_limit(300) in the caller, guarantees the
+	 * sweep eventually covers every file instead of failing once and never
+	 * retrying.
 	 *
-	 * @return int Number of extra files converted.
+	 * @return array{found:int,converted:int,failed:int}
 	 */
 	private function convert_orphan_files() {
+		$result = array(
+			'found'     => 0,
+			'converted' => 0,
+			'failed'    => 0,
+		);
+
 		if ( ! TKMO_Converter::has_available_backend() ) {
-			return 0;
+			return $result;
 		}
 
 		$upload_dir = wp_get_upload_dir();
 		$base_dir   = $upload_dir['basedir'];
 
 		if ( ! is_dir( $base_dir ) ) {
-			return 0;
+			return $result;
 		}
-
-		$converted = 0;
 
 		$extensions_to_mime = array(
 			'png'  => 'image/png',
@@ -402,15 +413,19 @@ class TKMO_Admin_Page {
 				continue;
 			}
 
-			$mime_type = $extensions_to_mime[ $extension ];
-			$result    = TKMO_Converter::convert( $source_path, $mime_type, TKMO_WEBP_QUALITY );
+			++$result['found'];
 
-			if ( $result ) {
-				++$converted;
+			$mime_type = $extensions_to_mime[ $extension ];
+			$converted = TKMO_Converter::convert( $source_path, $mime_type, TKMO_WEBP_QUALITY );
+
+			if ( $converted ) {
+				++$result['converted'];
+			} else {
+				++$result['failed'];
 			}
 		}
 
-		return $converted;
+		return $result;
 	}
 
 	/**

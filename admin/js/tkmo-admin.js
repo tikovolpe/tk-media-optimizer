@@ -56,10 +56,12 @@
 			} );
 		}
 
-		var total     = 0;
-		var processed = 0;
-		var converted = 0;
-		var errors    = 0;
+		var total            = 0;
+		var processed        = 0;
+		var converted        = 0;
+		var errors           = 0;
+		var orphansConverted = 0;
+		var orphansFailed    = 0;
 
 		function postAjax( action ) {
 			var body = new URLSearchParams();
@@ -83,7 +85,9 @@
 				'Total: ' + total +
 				' | Convertidos: ' + converted +
 				' | Erros: ' + errors +
-				' | Processados: ' + processed + '/' + total;
+				' | Processados: ' + processed + '/' + total +
+				' | Órfãos convertidos: ' + orphansConverted +
+				' | Órfãos com erro: ' + orphansFailed;
 		}
 
 		function runBatch() {
@@ -96,9 +100,11 @@
 
 				var data = response.data;
 
-				converted += data.converted;
-				errors    += data.errors;
-				processed  = total - data.remaining;
+				converted        += data.attachments_converted;
+				errors           += data.errors;
+				orphansConverted += data.orphans_converted;
+				orphansFailed    += data.orphans_failed;
+				processed         = total - data.remaining;
 
 				updateProgress();
 				applyStats( data.stats );
@@ -118,9 +124,11 @@
 
 		startButton.addEventListener( 'click', function () {
 			startButton.disabled = true;
-			converted = 0;
-			errors    = 0;
-			processed = 0;
+			converted        = 0;
+			errors           = 0;
+			processed        = 0;
+			orphansConverted = 0;
+			orphansFailed    = 0;
 			progressWrap.style.display = 'block';
 			progressStatus.textContent = tkmoAdmin.i18n.running;
 
