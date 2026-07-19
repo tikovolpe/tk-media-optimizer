@@ -7,8 +7,53 @@
 		var progressBar    = document.getElementById( 'tkmo-progress-bar' );
 		var progressStatus = document.getElementById( 'tkmo-progress-status' );
 
+		var ringProgress = document.getElementById( 'tkmo-ring-progress' );
+		var ringPercent  = document.getElementById( 'tkmo-ring-percent' );
+		var statTotal    = document.getElementById( 'tkmo-stat-total' );
+		var statConverted = document.getElementById( 'tkmo-stat-converted' );
+		var statPending   = document.getElementById( 'tkmo-stat-pending' );
+		var statErrors    = document.getElementById( 'tkmo-stat-errors' );
+
 		if ( ! startButton || typeof tkmoAdmin === 'undefined' ) {
 			return;
+		}
+
+		function applyStats( stats ) {
+			if ( ! stats ) {
+				return;
+			}
+
+			if ( ringProgress ) {
+				ringProgress.style.setProperty( '--tkmo-percent', stats.percent );
+			}
+
+			if ( ringPercent ) {
+				ringPercent.textContent = stats.percent;
+			}
+
+			if ( statTotal ) {
+				statTotal.textContent = stats.total;
+			}
+
+			if ( statConverted ) {
+				statConverted.textContent = stats.converted;
+			}
+
+			if ( statPending ) {
+				statPending.textContent = stats.pending;
+			}
+
+			if ( statErrors ) {
+				statErrors.textContent = stats.errors;
+			}
+		}
+
+		function refreshStats() {
+			postAjax( 'tkmo_get_stats' ).then( function ( response ) {
+				if ( response.success ) {
+					applyStats( response.data );
+				}
+			} );
 		}
 
 		var total     = 0;
@@ -56,6 +101,7 @@
 				processed  = total - data.remaining;
 
 				updateProgress();
+				applyStats( data.stats );
 
 				if ( data.done ) {
 					progressStatus.textContent = tkmoAdmin.i18n.done + ' ' + progressStatus.textContent;

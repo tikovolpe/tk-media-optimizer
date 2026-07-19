@@ -1,0 +1,138 @@
+.tkmo-admin-wrap {
+	max-width: 900px;
+}
+
+.tkmo-dashboard {
+	display: flex;
+	align-items: center;
+	gap: 32px;
+	flex-wrap: wrap;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	padding: 24px;
+	margin: 20px 0;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.tkmo-ring-wrap {
+	position: relative;
+	flex: 0 0 auto;
+	width: 140px;
+	height: 140px;
+}
+
+.tkmo-ring {
+	transform: rotate(-90deg);
+}
+
+.tkmo-ring-track {
+	fill: none;
+	stroke: #eef0f2;
+	stroke-width: 10;
+}
+
+.tkmo-ring-progress {
+	fill: none;
+	stroke: #00a86b;
+	stroke-width: 10;
+	stroke-linecap: round;
+	stroke-dasharray: 326.7256;
+	stroke-dashoffset: calc(326.7256 - (326.7256 * var(--tkmo-percent, 0)) / 100);
+	transition: stroke-dashoffset 0.6s ease;
+}
+
+.tkmo-ring-label {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: baseline;
+	justify-content: center;
+	font-size: 26px;
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.tkmo-ring-label span:last-child {
+	font-size: 14px;
+	font-weight: 400;
+	color: #646970;
+	margin-left: 2px;
+}
+
+.tkmo-stat-cards {
+	flex: 1 1 320px;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(120px, 1fr));
+	gap: 16px;
+}
+
+.tkmo-stat-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 14px 16px;
+	border-radius: 6px;
+	background: #f6f7f7;
+	border-left: 4px solid #8c8f94;
+}
+
+.tkmo-stat-number {
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 1.2;
+	color: #1d2327;
+}
+
+.tkmo-stat-label {
+	font-size: 12px;
+	color: #646970;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.tkmo-stat-total {
+	border-left-color: #2271b1;
+}
+
+.tkmo-stat-converted {
+	border-left-color: #00a86b;
+}
+
+.tkmo-stat-converted .tkmo-stat-number {
+	color: #00a86b;
+}
+
+.tkmo-stat-pending {
+	border-left-color: #dba617;
+}
+
+.tkmo-stat-pending .tkmo-stat-number {
+	color: #b8860b;
+}
+
+.tkmo-stat-errors {
+	border-left-color: #d63638;
+}
+
+.tkmo-stat-errors .tkmo-stat-number {
+	color: #d63638;
+}
+
+.tkmo-progress-wrap {
+	max-width: 600px;
+}
+
+.tkmo-progress-track {
+	background: #e5e5e5;
+	border-radius: 4px;
+	overflow: hidden;
+	height: 20px;
+}
+
+.tkmo-progress-bar {
+	background: linear-gradient(90deg, #2271b1, #00a86b);
+	height: 100%;
+	width: 0%;
+	transition: width 0.3s ease;
+}

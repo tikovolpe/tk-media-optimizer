@@ -59,6 +59,7 @@ class TKMO_Admin_Page {
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_tkmo_scan_pending', array( $this, 'ajax_scan_pending' ) );
 		add_action( 'wp_ajax_tkmo_convert_batch', array( $this, 'ajax_convert_batch' ) );
+		add_action( 'wp_ajax_tkmo_get_stats', array( $this, 'ajax_get_stats' ) );
 	}
 
 	/**
@@ -86,6 +87,13 @@ class TKMO_Admin_Page {
 		if ( 'tools_page_tkmo-media-optimizer' !== $hook_suffix ) {
 			return;
 		}
+
+		wp_enqueue_style(
+			'tkmo-admin',
+			TKMO_PLUGIN_URL . 'admin/css/tkmo-admin.css',
+			array(),
+			TKMO_VERSION
+		);
 
 		wp_enqueue_script(
 			'tkmo-admin',
@@ -128,6 +136,83 @@ class TKMO_Admin_Page {
 				'compare' => 'NOT EXISTS',
 			),
 		);
+	}
+
+	/**
+	 * Counts total eligible images, how many already have a WebP copy, and
+	 * how many failed conversion. Used to render the dashboard stat cards.
+	 *
+	 * @return array{total:int,converted:int,pending:int,errors:int,percent:int}
+	 */
+	private static function get_stats() {
+		$mime_types = array( 'image/jpeg', 'image/jpg', 'image/png' );
+
+		$total_query = new WP_Query(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'post_mime_type' => $mime_types,
+				'posts_per_page' => 1,
+				'fields'         => 'ids',
+			)
+		);
+
+		$converted_query = new WP_Query(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'post_mime_type' => $mime_types,
+				'posts_per_page' => 1,
+				'fields'         => 'ids',
+				'meta_query'     => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query
+					array(
+						'key'     => '_tk_webp_path',
+						'compare' => 'EXISTS',
+					),
+				),
+			)
+		);
+
+		$errors_query = new WP_Query(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'post_mime_type' => $mime_types,
+				'posts_per_page' => 1,
+				'fields'         => 'ids',
+				'meta_query'     => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query
+					array(
+						'key'     => '_tk_webp_error',
+						'compare' => 'EXISTS',
+					),
+				),
+			)
+		);
+
+		$total     = (int) $total_query->found_posts;
+		$converted = (int) $converted_query->found_posts;
+		$errors    = (int) $errors_query->found_posts;
+		$pending   = max( 0, $total - $converted - $errors );
+		$percent   = $total > 0 ? (int) round( ( $converted / $total ) * 100 ) : 0;
+
+		return array(
+			'total'     => $total,
+			'converted' => $converted,
+			'pending'   => $pending,
+			'errors'    => $errors,
+			'percent'   => $percent,
+		);
+	}
+
+	/**
+	 * AJAX: returns the current dashboard stats.
+	 *
+	 * @return void
+	 */
+	public function ajax_get_stats() {
+		$this->verify_ajax_request();
+
+		wp_send_json_success( self::get_stats() );
 	}
 
 	/**
@@ -253,11 +338,12 @@ class TKMO_Admin_Page {
 
 		wp_send_json_success(
 			array(
-				'converted'        => $converted,
-				'errors'           => $errors,
-				'remaining'        => $remaining,
-				'extra_converted'  => $extra_converted,
-				'done'             => 0 === $remaining,
+				'converted'       => $converted,
+				'errors'          => $errors,
+				'remaining'       => $remaining,
+				'extra_converted' => $extra_converted,
+				'done'            => 0 === $remaining,
+				'stats'           => self::get_stats(),
 			)
 		);
 	}
@@ -336,6 +422,8 @@ class TKMO_Admin_Page {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
+
+		$stats = self::get_stats();
 		?>
 		<div class="wrap tkmo-admin-wrap">
 			<h1><?php echo esc_html__( 'TK Media Optimizer', 'tk-media-optimizer' ); ?></h1>
@@ -347,15 +435,51 @@ class TKMO_Admin_Page {
 				</div>
 			<?php endif; ?>
 
+			<div class="tkmo-dashboard">
+				<div class="tkmo-ring-wrap">
+					<svg class="tkmo-ring" viewBox="0 0 120 120" width="140" height="140">
+						<circle class="tkmo-ring-track" cx="60" cy="60" r="52" />
+						<circle
+							id="tkmo-ring-progress"
+							class="tkmo-ring-progress"
+							cx="60" cy="60" r="52"
+							style="--tkmo-percent: <?php echo esc_attr( $stats['percent'] ); ?>"
+						/>
+					</svg>
+					<div class="tkmo-ring-label">
+						<span id="tkmo-ring-percent"><?php echo esc_html( $stats['percent'] ); ?></span><span>%</span>
+					</div>
+				</div>
+
+				<div class="tkmo-stat-cards">
+					<div class="tkmo-stat-card tkmo-stat-total">
+						<span class="tkmo-stat-number" id="tkmo-stat-total"><?php echo esc_html( $stats['total'] ); ?></span>
+						<span class="tkmo-stat-label"><?php echo esc_html__( 'Total de imagens', 'tk-media-optimizer' ); ?></span>
+					</div>
+					<div class="tkmo-stat-card tkmo-stat-converted">
+						<span class="tkmo-stat-number" id="tkmo-stat-converted"><?php echo esc_html( $stats['converted'] ); ?></span>
+						<span class="tkmo-stat-label"><?php echo esc_html__( 'Convertidas', 'tk-media-optimizer' ); ?></span>
+					</div>
+					<div class="tkmo-stat-card tkmo-stat-pending">
+						<span class="tkmo-stat-number" id="tkmo-stat-pending"><?php echo esc_html( $stats['pending'] ); ?></span>
+						<span class="tkmo-stat-label"><?php echo esc_html__( 'Pendentes', 'tk-media-optimizer' ); ?></span>
+					</div>
+					<div class="tkmo-stat-card tkmo-stat-errors">
+						<span class="tkmo-stat-number" id="tkmo-stat-errors"><?php echo esc_html( $stats['errors'] ); ?></span>
+						<span class="tkmo-stat-label"><?php echo esc_html__( 'Erros', 'tk-media-optimizer' ); ?></span>
+					</div>
+				</div>
+			</div>
+
 			<p>
 				<button type="button" id="tkmo-start-batch" class="button button-primary" <?php disabled( ! TKMO_Converter::has_available_backend() ); ?>>
 					<?php echo esc_html__( 'Converter todas as imagens existentes', 'tk-media-optimizer' ); ?>
 				</button>
 			</p>
 
-			<div id="tkmo-progress-wrap" style="display:none; max-width:600px;">
-				<div style="background:#e5e5e5; border-radius:4px; overflow:hidden; height:20px;">
-					<div id="tkmo-progress-bar" style="background:#2271b1; height:100%; width:0%;"></div>
+			<div id="tkmo-progress-wrap" class="tkmo-progress-wrap" style="display:none;">
+				<div class="tkmo-progress-track">
+					<div id="tkmo-progress-bar" class="tkmo-progress-bar"></div>
 				</div>
 				<p id="tkmo-progress-status"></p>
 			</div>
