@@ -207,3 +207,27 @@
 	color: #646970;
 	font-style: italic;
 }
+
+.tkmo-errors-detail {
+	margin-top: 32px;
+}
+
+.tkmo-errors-detail .description {
+	margin: 4px 0 12px;
+}
+
+.tkmo-errors-table .tkmo-col-file {
+	width: 260px;
+	word-break: break-all;
+}
+
+.tkmo-errors-table .tkmo-col-file code {
+	font-size: 12px;
+	background: #f0f0f1;
+	padding: 2px 6px;
+	border-radius: 4px;
+}
+
+.tkmo-errors-table .tkmo-col-reason {
+	color: #b32d2e;
+}

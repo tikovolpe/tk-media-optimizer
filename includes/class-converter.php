@@ -30,6 +30,36 @@ class TKMO_Converter {
 	);
 
 	/**
+	 * Human-readable reason for the most recent convert() failure. Read it
+	 * with get_last_error() right after a convert() call returns false.
+	 *
+	 * @var string
+	 */
+	private static $last_error = '';
+
+	/**
+	 * Returns the reason for the most recent failed conversion.
+	 *
+	 * @return string Empty string when the last conversion succeeded.
+	 */
+	public static function get_last_error() {
+		return self::$last_error;
+	}
+
+	/**
+	 * Records a failure reason and returns false, so callers can
+	 * `return self::fail( '...' );` in one line.
+	 *
+	 * @param string $reason Human-readable failure reason.
+	 * @return false
+	 */
+	private static function fail( $reason ) {
+		self::$last_error = $reason;
+
+		return false;
+	}
+
+	/**
 	 * Checks whether the given mime type can be converted.
 	 *
 	 * @param string $mime_type Mime type of the source file.
@@ -83,16 +113,30 @@ class TKMO_Converter {
 	 * @return string|false Absolute path to the generated .webp file, or false on failure.
 	 */
 	public static function convert( $source_path, $mime_type, $quality = 82 ) {
+		self::$last_error = '';
+
 		if ( ! file_exists( $source_path ) || ! is_readable( $source_path ) ) {
-			return false;
+			return self::fail( esc_html__( 'Arquivo de origem ausente ou sem permissão de leitura.', 'tk-media-optimizer' ) );
 		}
 
 		if ( ! self::is_supported_mime( $mime_type ) ) {
-			return false;
+			return self::fail(
+				sprintf(
+					/* translators: %s: detected mime type */
+					esc_html__( 'Tipo de arquivo não suportado (%s).', 'tk-media-optimizer' ),
+					$mime_type ? $mime_type : 'desconhecido'
+				)
+			);
 		}
 
-		if ( self::exceeds_pixel_budget( $source_path ) ) {
-			return false;
+		$oversize = self::pixel_budget_reason( $source_path );
+
+		if ( '' !== $oversize ) {
+			return self::fail( $oversize );
+		}
+
+		if ( ! self::has_available_backend() ) {
+			return self::fail( esc_html__( 'Nenhum conversor (GD ou Imagick) disponível neste servidor.', 'tk-media-optimizer' ) );
 		}
 
 		// GD/Imagick allocate the full decoded bitmap in memory; give them room.
@@ -103,13 +147,19 @@ class TKMO_Converter {
 		$destination_path = self::build_destination_path( $source_path );
 
 		if ( false === $destination_path ) {
-			return false;
+			return self::fail( esc_html__( 'Não foi possível montar o caminho de destino .webp.', 'tk-media-optimizer' ) );
+		}
+
+		if ( ! is_writable( dirname( $destination_path ) ) ) {
+			return self::fail( esc_html__( 'A pasta de destino não tem permissão de escrita.', 'tk-media-optimizer' ) );
 		}
 
 		if ( self::gd_available() ) {
 			$result = self::convert_with_gd( $source_path, $destination_path, $mime_type, $quality );
 
 			if ( $result ) {
+				self::$last_error = '';
+
 				return $destination_path;
 			}
 		}
@@ -118,8 +168,14 @@ class TKMO_Converter {
 			$result = self::convert_with_imagick( $source_path, $destination_path, $quality );
 
 			if ( $result ) {
+				self::$last_error = '';
+
 				return $destination_path;
 			}
+		}
+
+		if ( '' === self::$last_error ) {
+			self::$last_error = esc_html__( 'A conversão falhou por motivo desconhecido.', 'tk-media-optimizer' );
 		}
 
 		return false;
@@ -131,24 +187,37 @@ class TKMO_Converter {
 	 * never the pixels) so the check itself costs almost nothing.
 	 *
 	 * @param string $source_path Absolute path to the source file.
-	 * @return bool True when the image should be skipped.
+	 * @return string Failure reason, or '' when the image is within budget.
 	 */
-	private static function exceeds_pixel_budget( $source_path ) {
+	private static function pixel_budget_reason( $source_path ) {
 		$max_megapixels = defined( 'TKMO_MAX_MEGAPIXELS' ) ? (float) TKMO_MAX_MEGAPIXELS : 24.0;
 
 		if ( $max_megapixels <= 0 ) {
-			return false;
+			return '';
 		}
 
 		$dimensions = @getimagesize( $source_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 
 		if ( ! is_array( $dimensions ) || empty( $dimensions[0] ) || empty( $dimensions[1] ) ) {
-			return false;
+			return esc_html__( 'Não foi possível ler as dimensões da imagem (arquivo corrompido ou não é uma imagem válida).', 'tk-media-optimizer' );
 		}
 
-		$megapixels = ( (int) $dimensions[0] * (int) $dimensions[1] ) / 1000000;
+		$width      = (int) $dimensions[0];
+		$height     = (int) $dimensions[1];
+		$megapixels = ( $width * $height ) / 1000000;
 
-		return $megapixels > $max_megapixels;
+		if ( $megapixels <= $max_megapixels ) {
+			return '';
+		}
+
+		return sprintf(
+			/* translators: 1: image width, 2: image height, 3: megapixels, 4: megapixel limit */
+			esc_html__( 'Imagem grande demais: %1$dx%2$d (%3$s MP), acima do limite de %4$s MP. Aumente TKMO_MAX_MEGAPIXELS se o servidor tiver memória.', 'tk-media-optimizer' ),
+			$width,
+			$height,
+			number_format_i18n( $megapixels, 1 ),
+			number_format_i18n( $max_megapixels, 1 )
+		);
 	}
 
 	/**
@@ -186,7 +255,7 @@ class TKMO_Converter {
 		}
 
 		if ( ! $image ) {
-			return false;
+			return self::fail( esc_html__( 'GD não conseguiu abrir a imagem de origem (formato inesperado ou arquivo corrompido).', 'tk-media-optimizer' ) );
 		}
 
 		if ( 'image/png' === $mime_type ) {
@@ -198,7 +267,11 @@ class TKMO_Converter {
 		$saved = @imagewebp( $image, $destination_path, $quality ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		imagedestroy( $image );
 
-		return (bool) $saved && file_exists( $destination_path );
+		if ( $saved && file_exists( $destination_path ) ) {
+			return true;
+		}
+
+		return self::fail( esc_html__( 'GD abriu a imagem mas falhou ao gravar o arquivo .webp.', 'tk-media-optimizer' ) );
 	}
 
 	/**
@@ -220,9 +293,19 @@ class TKMO_Converter {
 			$imagick->clear();
 			$imagick->destroy();
 
-			return (bool) $saved && file_exists( $destination_path );
+			if ( $saved && file_exists( $destination_path ) ) {
+				return true;
+			}
+
+			return self::fail( esc_html__( 'Imagick processou a imagem mas não gravou o arquivo .webp.', 'tk-media-optimizer' ) );
 		} catch ( Exception $e ) {
-			return false;
+			return self::fail(
+				sprintf(
+					/* translators: %s: Imagick exception message */
+					esc_html__( 'Imagick falhou: %s', 'tk-media-optimizer' ),
+					$e->getMessage()
+				)
+			);
 		}
 	}
 

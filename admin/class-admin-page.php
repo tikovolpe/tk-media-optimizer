@@ -64,12 +64,22 @@ class TKMO_Admin_Page {
 	const QUEUE_TRANSIENT = 'tkmo_batch_queue';
 
 	/**
-	 * Option storing the absolute paths of files that failed conversion.
-	 * Keyed by path so lookups and de-duplication are O(1).
+	 * Option storing the failed-conversion map. Keyed by absolute path (so
+	 * lookups and de-duplication are O(1)); each value is an array with
+	 * 'reason' (human string) and 'time' (unix timestamp). Legacy installs
+	 * may still hold a bare int 1 as the value, handled on read.
 	 *
 	 * @var string
 	 */
 	const ERRORS_OPTION = 'tkmo_conversion_errors';
+
+	/**
+	 * Hard cap on how many per-file error rows the dashboard renders, so a
+	 * pathological run cannot bloat the AJAX payload.
+	 *
+	 * @var int
+	 */
+	const ERRORS_DETAIL_LIMIT = 300;
 
 	/**
 	 * Returns the singleton instance, registering hooks on first call.
@@ -153,6 +163,7 @@ class TKMO_Admin_Page {
 					'pending'    => esc_html__( 'Pendente', 'tk-media-optimizer' ),
 					'errors'     => esc_html__( 'Erro', 'tk-media-optimizer' ),
 					'root'       => esc_html__( '(raiz)', 'tk-media-optimizer' ),
+					'no_errors'  => esc_html__( 'Nenhum erro registrado.', 'tk-media-optimizer' ),
 				),
 			)
 		);
@@ -190,6 +201,34 @@ class TKMO_Admin_Page {
 		$map = get_option( self::ERRORS_OPTION, array() );
 
 		return is_array( $map ) ? $map : array();
+	}
+
+	/**
+	 * Extracts a human-readable reason from one entry of the error map,
+	 * tolerating the legacy `1` value written by older versions.
+	 *
+	 * @param mixed $entry Value stored in the error map for a path.
+	 * @return string
+	 */
+	private static function error_reason( $entry ) {
+		if ( is_array( $entry ) && ! empty( $entry['reason'] ) ) {
+			return (string) $entry['reason'];
+		}
+
+		return esc_html__( 'Motivo não registrado (falha anterior à v1.0.8). Rode a conversão novamente para capturar o detalhe.', 'tk-media-optimizer' );
+	}
+
+	/**
+	 * Builds one error-map entry for a failed path.
+	 *
+	 * @param string $reason Human-readable failure reason.
+	 * @return array{reason:string,time:int}
+	 */
+	private static function error_entry( $reason ) {
+		return array(
+			'reason' => '' !== (string) $reason ? (string) $reason : esc_html__( 'Falha por motivo desconhecido.', 'tk-media-optimizer' ),
+			'time'   => time(),
+		);
 	}
 
 	/**
@@ -273,6 +312,7 @@ class TKMO_Admin_Page {
 			'saved_bytes'    => 0,
 			'percent'        => 0,
 			'groups'         => array(),
+			'errors_detail'  => array(),
 		);
 
 		$upload_dir = wp_get_upload_dir();
@@ -282,10 +322,11 @@ class TKMO_Admin_Page {
 			return $stats;
 		}
 
-		$extensions = self::get_supported_extensions();
-		$error_map  = self::get_error_map();
-		$base_len   = strlen( trailingslashit( wp_normalize_path( $base_dir ) ) );
-		$groups     = array();
+		$extensions    = self::get_supported_extensions();
+		$error_map     = self::get_error_map();
+		$base_len      = strlen( trailingslashit( wp_normalize_path( $base_dir ) ) );
+		$groups        = array();
+		$errors_detail = array();
 
 		foreach ( self::build_iterator( $base_dir ) as $file ) {
 			if ( ! $file->isFile() ) {
@@ -299,13 +340,14 @@ class TKMO_Admin_Page {
 			}
 
 			$path      = $file->getPathname();
+			$normalized = wp_normalize_path( $path );
 			$webp_path = self::webp_path_for( $path );
 
 			if ( file_exists( $webp_path ) ) {
 				$status                   = 'converted';
 				$stats['original_bytes'] += (int) $file->getSize();
 				$stats['webp_bytes']     += (int) self::safe_filesize( $webp_path );
-			} elseif ( isset( $error_map[ $path ] ) ) {
+			} elseif ( isset( $error_map[ $normalized ] ) || isset( $error_map[ $path ] ) ) {
 				$status = 'errors';
 			} else {
 				$status = 'pending';
@@ -314,11 +356,21 @@ class TKMO_Admin_Page {
 			++$stats[ $status ];
 			++$stats['total'];
 
-			if ( $with_groups ) {
-				$relative = substr( wp_normalize_path( $path ), $base_len );
-				$folder   = trim( dirname( $relative ), '/.' );
-				$folder   = '' === $folder ? '/' : $folder;
+			$relative = substr( $normalized, $base_len );
+			$folder   = trim( dirname( $relative ), '/.' );
+			$folder   = '' === $folder ? '/' : $folder;
 
+			if ( 'errors' === $status && count( $errors_detail ) < self::ERRORS_DETAIL_LIMIT ) {
+				$entry           = isset( $error_map[ $normalized ] ) ? $error_map[ $normalized ] : $error_map[ $path ];
+				$errors_detail[] = array(
+					'folder' => $folder,
+					'file'   => wp_basename( $relative ),
+					'path'   => $relative,
+					'reason' => self::error_reason( $entry ),
+				);
+			}
+
+			if ( $with_groups ) {
 				if ( ! isset( $groups[ $folder ] ) ) {
 					$groups[ $folder ] = array(
 						'converted' => 0,
@@ -333,6 +385,15 @@ class TKMO_Admin_Page {
 
 		$stats['saved_bytes'] = max( 0, $stats['original_bytes'] - $stats['webp_bytes'] );
 		$stats['percent']     = $stats['total'] > 0 ? (int) round( ( $stats['converted'] / $stats['total'] ) * 100 ) : 0;
+
+		usort(
+			$errors_detail,
+			static function ( $a, $b ) {
+				return strcmp( $a['path'], $b['path'] );
+			}
+		);
+
+		$stats['errors_detail'] = $errors_detail;
 
 		if ( $with_groups ) {
 			ksort( $groups );
@@ -515,11 +576,17 @@ class TKMO_Admin_Page {
 					unset( $error_map[ $path ] );
 				} else {
 					++$failed;
-					$error_map[ $path ] = 1;
+					$error_map[ $path ] = self::error_entry( TKMO_Converter::get_last_error() );
 				}
 			}
 		} catch ( \Throwable $e ) {
-			$error_map[ $path ] = 1;
+			$error_map[ $path ] = self::error_entry(
+				sprintf(
+					/* translators: %s: PHP exception message */
+					esc_html__( 'Exceção do PHP: %s', 'tk-media-optimizer' ),
+					$e->getMessage()
+				)
+			);
 			update_option( self::ERRORS_OPTION, $error_map, false );
 
 			// Keep the not-yet-processed tail so a retry resumes past this file.
@@ -619,6 +686,34 @@ class TKMO_Admin_Page {
 	}
 
 	/**
+	 * Renders the body rows of the per-file error table.
+	 *
+	 * @param array $errors_detail List of {folder,file,path,reason} rows from scan_disk().
+	 * @return void
+	 */
+	private function render_error_rows( $errors_detail ) {
+		if ( empty( $errors_detail ) ) {
+			?>
+			<tr class="tkmo-table-empty">
+				<td colspan="3"><?php echo esc_html__( 'Nenhum erro registrado.', 'tk-media-optimizer' ); ?></td>
+			</tr>
+			<?php
+			return;
+		}
+
+		foreach ( $errors_detail as $row ) {
+			$folder = isset( $row['folder'] ) && '/' !== $row['folder'] ? $row['folder'] : esc_html__( '(raiz)', 'tk-media-optimizer' );
+			?>
+			<tr>
+				<td class="tkmo-col-folder"><?php echo esc_html( $folder ); ?></td>
+				<td class="tkmo-col-file"><code><?php echo esc_html( isset( $row['file'] ) ? $row['file'] : '' ); ?></code></td>
+				<td class="tkmo-col-reason"><?php echo esc_html( isset( $row['reason'] ) ? $row['reason'] : '' ); ?></td>
+			</tr>
+			<?php
+		}
+	}
+
+	/**
 	 * Renders the admin page markup.
 	 *
 	 * @return void
@@ -701,6 +796,23 @@ class TKMO_Admin_Page {
 					<?php $this->render_groups_rows( $stats['groups'] ); ?>
 				</tbody>
 			</table>
+
+			<div id="tkmo-errors-detail-wrap" class="tkmo-errors-detail"<?php echo empty( $stats['errors_detail'] ) ? ' style="display:none;"' : ''; ?>>
+				<h2 class="tkmo-table-title"><?php echo esc_html__( 'Detalhes dos erros', 'tk-media-optimizer' ); ?></h2>
+				<p class="description"><?php echo esc_html__( 'Cada arquivo que falhou na conversão, com o motivo exato. A lista é atualizada a cada nova execução.', 'tk-media-optimizer' ); ?></p>
+				<table class="widefat striped tkmo-table tkmo-errors-table">
+					<thead>
+						<tr>
+							<th><?php echo esc_html__( 'Pasta', 'tk-media-optimizer' ); ?></th>
+							<th><?php echo esc_html__( 'Arquivo', 'tk-media-optimizer' ); ?></th>
+							<th><?php echo esc_html__( 'Motivo', 'tk-media-optimizer' ); ?></th>
+						</tr>
+					</thead>
+					<tbody id="tkmo-errors-body">
+						<?php $this->render_error_rows( $stats['errors_detail'] ); ?>
+					</tbody>
+				</table>
+			</div>
 		</div>
 		<?php
 	}

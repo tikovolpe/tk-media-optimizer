@@ -61,6 +61,12 @@ a imagem original é enviada normalmente, sem conversão.
 
 == Changelog ==
 
+= 1.0.8 =
+* Nova seção "Detalhes dos erros" no dashboard: lista cada arquivo que
+  falhou na conversão com o motivo exato (imagem grande demais e suas
+  dimensões, GD/Imagick não abriu, pasta sem escrita, exceção do PHP, etc.).
+* O motivo da falha agora é persistido por arquivo, não só um contador.
+
 = 1.0.7 =
 * Correção: batch de conversão deixava de causar erro 500 em VPS. Imagens
   muito grandes (acima de 24 megapixels por padrão) são puladas e marcadas

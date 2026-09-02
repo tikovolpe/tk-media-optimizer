@@ -15,6 +15,8 @@
 		var statErrors    = document.getElementById( 'tkmo-stat-errors' );
 		var savingsValue  = document.getElementById( 'tkmo-savings-value' );
 		var tableBody     = document.getElementById( 'tkmo-table-body' );
+		var errorsWrap    = document.getElementById( 'tkmo-errors-detail-wrap' );
+		var errorsBody    = document.getElementById( 'tkmo-errors-body' );
 
 		if ( ! startButton || typeof tkmoAdmin === 'undefined' ) {
 			return;
@@ -106,6 +108,39 @@
 			tableBody.innerHTML = rows;
 		}
 
+		function rebuildErrors( errorsDetail ) {
+			if ( ! errorsWrap || ! errorsBody ) {
+				return;
+			}
+
+			var list = Array.isArray( errorsDetail ) ? errorsDetail : [];
+
+			if ( 0 === list.length ) {
+				errorsWrap.style.display = 'none';
+				errorsBody.innerHTML =
+					'<tr class="tkmo-table-empty"><td colspan="3">' +
+					escapeHtml( i18n.no_errors || 'Nenhum erro registrado.' ) +
+					'</td></tr>';
+				return;
+			}
+
+			var rows = '';
+
+			list.forEach( function ( row ) {
+				var folder = row.folder && '/' !== row.folder ? row.folder : ( i18n.root || '(raiz)' );
+
+				rows +=
+					'<tr>' +
+					'<td class="tkmo-col-folder">' + escapeHtml( folder ) + '</td>' +
+					'<td class="tkmo-col-file"><code>' + escapeHtml( row.file || '' ) + '</code></td>' +
+					'<td class="tkmo-col-reason">' + escapeHtml( row.reason || '' ) + '</td>' +
+					'</tr>';
+			} );
+
+			errorsBody.innerHTML = rows;
+			errorsWrap.style.display = '';
+		}
+
 		function applyStats( stats ) {
 			if ( ! stats ) {
 				return;
@@ -134,6 +169,7 @@
 			}
 
 			rebuildTable( stats.groups );
+			rebuildErrors( stats.errors_detail );
 		}
 
 		function updateProgress() {
