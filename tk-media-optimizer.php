@@ -3,7 +3,7 @@
  * Plugin Name:       TK Media Optimizer
  * Plugin URI:        https://tikovolpe.com.br
  * Description:       Converte automaticamente imagens para WebP no upload. Desenvolvido pela Tiko Volpe Studio.
- * Version:           1.0.6
+ * Version:           1.0.7
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Tiko Volpe Studio
@@ -18,11 +18,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TKMO_VERSION', '1.0.6' );
+define( 'TKMO_VERSION', '1.0.7' );
 define( 'TKMO_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'TKMO_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'TKMO_PLUGIN_FILE', __FILE__ );
 define( 'TKMO_WEBP_QUALITY', 82 );
+
+/**
+ * Images larger than this (width * height, in megapixels) are skipped by the
+ * batch converter. A GD truecolor bitmap needs roughly width * height * 4
+ * bytes of RAM while open, so an unbounded image can exhaust memory_limit and
+ * fatal the whole AJAX request. Skipped images are reported as errors, never
+ * fatal. Raise this only if the server has generous memory_limit headroom.
+ */
+if ( ! defined( 'TKMO_MAX_MEGAPIXELS' ) ) {
+	define( 'TKMO_MAX_MEGAPIXELS', 24 );
+}
+
 define( 'TKMO_GITHUB_REPO', 'tikovolpe/tk-media-optimizer' );
 
 require_once TKMO_PLUGIN_DIR . 'includes/plugin-update-checker/load-v5p7.php';

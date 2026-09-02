@@ -26,6 +26,14 @@
 		var processed = 0;
 		var converted = 0;
 		var failed    = 0;
+		var tick      = 0;
+
+		// Pause between ticks so a shared VPS is not hammered back-to-back.
+		var TICK_DELAY_MS = 250;
+
+		// Refresh the (expensive) dashboard stats every Nth tick instead of
+		// every tick; the server only ships full stats on the final tick.
+		var STATS_EVERY = 10;
 
 		function postAjax( action ) {
 			var body = new URLSearchParams();
@@ -137,6 +145,14 @@
 				' | Erros: ' + failed;
 		}
 
+		function refreshStats() {
+			postAjax( 'tkmo_get_stats' ).then( function ( response ) {
+				if ( response && response.success ) {
+					applyStats( response.data );
+				}
+			} ).catch( function () {} );
+		}
+
 		function runBatch() {
 			postAjax( 'tkmo_convert_batch' ).then( function ( response ) {
 				if ( ! response.success ) {
@@ -150,6 +166,7 @@
 				converted += data.converted;
 				failed    += data.failed;
 				processed  = total - data.remaining;
+				tick++;
 
 				updateProgress();
 				applyStats( data.stats );
@@ -166,7 +183,11 @@
 					return;
 				}
 
-				runBatch();
+				if ( 0 === tick % STATS_EVERY ) {
+					refreshStats();
+				}
+
+				setTimeout( runBatch, TICK_DELAY_MS );
 			} ).catch( function () {
 				progressStatus.textContent = i18n.conn_error;
 				startButton.disabled = false;
@@ -178,6 +199,7 @@
 			converted = 0;
 			failed    = 0;
 			processed = 0;
+			tick      = 0;
 			progressWrap.style.display = 'block';
 			progressStatus.textContent = i18n.running;
 

@@ -37,7 +37,16 @@ class TKMO_Admin_Page {
 	 *
 	 * @var int
 	 */
-	const BATCH_SIZE = 10;
+	const BATCH_SIZE = 3;
+
+	/**
+	 * Transient set for the lifetime of a single batch tick. Blocks a second,
+	 * overlapping tick (e.g. a hung request that a proxy already killed) from
+	 * piling more work onto the same server.
+	 *
+	 * @var string
+	 */
+	const LOCK_TRANSIENT = 'tkmo_batch_lock';
 
 	/**
 	 * AJAX nonce action name.
@@ -190,9 +199,51 @@ class TKMO_Admin_Page {
 	 * @return RecursiveIteratorIterator
 	 */
 	private static function build_iterator( $base_dir ) {
+		// CATCH_GET_CHILD: an unreadable sub-directory is skipped instead of
+		// throwing an UnexpectedValueException that would fatal the request.
 		return new RecursiveIteratorIterator(
 			new RecursiveDirectoryIterator( $base_dir, FilesystemIterator::SKIP_DOTS ),
-			RecursiveIteratorIterator::LEAVES_ONLY
+			RecursiveIteratorIterator::LEAVES_ONLY,
+			RecursiveIteratorIterator::CATCH_GET_CHILD
+		);
+	}
+
+	/**
+	 * Raises PHP limits for a long-running batch request and installs a
+	 * shutdown handler that writes any fatal error to the PHP error log, so
+	 * a 500 during conversion leaves a diagnosable trace.
+	 *
+	 * @return void
+	 */
+	private function raise_limits() {
+		if ( function_exists( 'wp_raise_memory_limit' ) ) {
+			wp_raise_memory_limit( 'image' );
+		}
+
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 300 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_set_time_limit
+		}
+
+		if ( function_exists( 'ignore_user_abort' ) ) {
+			ignore_user_abort( true );
+		}
+
+		register_shutdown_function(
+			static function () {
+				$error = error_get_last();
+
+				if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
+					error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+						sprintf(
+							'[tk-media-optimizer] fatal during batch: %s in %s:%d',
+							$error['message'],
+							$error['file'],
+							$error['line']
+						)
+					);
+					delete_transient( self::LOCK_TRANSIENT );
+				}
+			}
 		);
 	}
 
@@ -367,6 +418,7 @@ class TKMO_Admin_Page {
 	 */
 	public function ajax_get_stats() {
 		$this->verify_ajax_request();
+		$this->raise_limits();
 
 		wp_send_json_success( self::scan_disk( true ) );
 	}
@@ -379,8 +431,9 @@ class TKMO_Admin_Page {
 	 */
 	public function ajax_scan_pending() {
 		$this->verify_ajax_request();
+		$this->raise_limits();
 
-		set_time_limit( 300 );
+		delete_transient( self::LOCK_TRANSIENT );
 
 		// Fresh run: clear old error flags so previously-failed files retry.
 		update_option( self::ERRORS_OPTION, array(), false );
@@ -400,11 +453,20 @@ class TKMO_Admin_Page {
 	 */
 	public function ajax_convert_batch() {
 		$this->verify_ajax_request();
+		$this->raise_limits();
 
-		set_time_limit( 300 );
+		if ( get_transient( self::LOCK_TRANSIENT ) ) {
+			wp_send_json_error(
+				array( 'message' => esc_html__( 'Uma conversão anterior ainda está em andamento no servidor. Aguarde alguns segundos e tente novamente.', 'tk-media-optimizer' ) ),
+				409
+			);
+		}
+
+		set_transient( self::LOCK_TRANSIENT, 1, 2 * MINUTE_IN_SECONDS );
 
 		if ( ! TKMO_Converter::has_available_backend() ) {
 			delete_transient( self::QUEUE_TRANSIENT );
+			delete_transient( self::LOCK_TRANSIENT );
 
 			wp_send_json_success(
 				array(
@@ -430,30 +492,54 @@ class TKMO_Admin_Page {
 		$converted  = 0;
 		$failed     = 0;
 
-		foreach ( $batch as $path ) {
-			$path      = wp_normalize_path( $path );
-			$extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
+		try {
+			foreach ( $batch as $path ) {
+				$path      = wp_normalize_path( $path );
+				$extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
 
-			if ( ! isset( $extensions[ $extension ] ) || ! file_exists( $path ) ) {
-				continue;
+				if ( ! isset( $extensions[ $extension ] ) || ! file_exists( $path ) ) {
+					continue;
+				}
+
+				// Already converted by a concurrent run/upload hook: count it.
+				if ( file_exists( self::webp_path_for( $path ) ) ) {
+					++$converted;
+					unset( $error_map[ $path ] );
+					continue;
+				}
+
+				$result = TKMO_Converter::convert( $path, $extensions[ $extension ], TKMO_WEBP_QUALITY );
+
+				if ( $result ) {
+					++$converted;
+					unset( $error_map[ $path ] );
+				} else {
+					++$failed;
+					$error_map[ $path ] = 1;
+				}
 			}
+		} catch ( \Throwable $e ) {
+			$error_map[ $path ] = 1;
+			update_option( self::ERRORS_OPTION, $error_map, false );
 
-			// Already converted by a concurrent run/upload hook: count it.
-			if ( file_exists( self::webp_path_for( $path ) ) ) {
-				++$converted;
-				unset( $error_map[ $path ] );
-				continue;
-			}
+			// Keep the not-yet-processed tail so a retry resumes past this file.
+			set_transient( self::QUEUE_TRANSIENT, $queue, HOUR_IN_SECONDS );
+			delete_transient( self::LOCK_TRANSIENT );
 
-			$result = TKMO_Converter::convert( $path, $extensions[ $extension ], TKMO_WEBP_QUALITY );
+			error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				sprintf( '[tk-media-optimizer] %s while converting %s', $e->getMessage(), $path )
+			);
 
-			if ( $result ) {
-				++$converted;
-				unset( $error_map[ $path ] );
-			} else {
-				++$failed;
-				$error_map[ $path ] = 1;
-			}
+			wp_send_json_error(
+				array(
+					'message' => sprintf(
+						/* translators: %s: image file name */
+						esc_html__( 'Falha ao converter %s. O arquivo foi marcado como erro e a conversão continua a partir do próximo.', 'tk-media-optimizer' ),
+						esc_html( basename( $path ) )
+					),
+				),
+				500
+			);
 		}
 
 		update_option( self::ERRORS_OPTION, $error_map, false );
@@ -467,15 +553,22 @@ class TKMO_Admin_Page {
 			set_transient( self::QUEUE_TRANSIENT, $queue, HOUR_IN_SECONDS );
 		}
 
-		wp_send_json_success(
-			array(
-				'converted' => $converted,
-				'failed'    => $failed,
-				'remaining' => $remaining,
-				'done'      => $done,
-				'stats'     => self::scan_disk( true ),
-			)
+		delete_transient( self::LOCK_TRANSIENT );
+
+		$response = array(
+			'converted' => $converted,
+			'failed'    => $failed,
+			'remaining' => $remaining,
+			'done'      => $done,
 		);
+
+		// A full recursive disk rescan is expensive; only run it once the
+		// batch is finished, not on every tick.
+		if ( $done ) {
+			$response['stats'] = self::scan_disk( true );
+		}
+
+		wp_send_json_success( $response );
 	}
 
 	/**

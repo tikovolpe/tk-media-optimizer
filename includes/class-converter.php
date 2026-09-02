@@ -91,6 +91,15 @@ class TKMO_Converter {
 			return false;
 		}
 
+		if ( self::exceeds_pixel_budget( $source_path ) ) {
+			return false;
+		}
+
+		// GD/Imagick allocate the full decoded bitmap in memory; give them room.
+		if ( function_exists( 'wp_raise_memory_limit' ) ) {
+			wp_raise_memory_limit( 'image' );
+		}
+
 		$destination_path = self::build_destination_path( $source_path );
 
 		if ( false === $destination_path ) {
@@ -114,6 +123,32 @@ class TKMO_Converter {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Reports whether an image is too large to decode safely within the
+	 * server's memory budget. Uses getimagesize() (reads only the header,
+	 * never the pixels) so the check itself costs almost nothing.
+	 *
+	 * @param string $source_path Absolute path to the source file.
+	 * @return bool True when the image should be skipped.
+	 */
+	private static function exceeds_pixel_budget( $source_path ) {
+		$max_megapixels = defined( 'TKMO_MAX_MEGAPIXELS' ) ? (float) TKMO_MAX_MEGAPIXELS : 24.0;
+
+		if ( $max_megapixels <= 0 ) {
+			return false;
+		}
+
+		$dimensions = @getimagesize( $source_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+
+		if ( ! is_array( $dimensions ) || empty( $dimensions[0] ) || empty( $dimensions[1] ) ) {
+			return false;
+		}
+
+		$megapixels = ( (int) $dimensions[0] * (int) $dimensions[1] ) / 1000000;
+
+		return $megapixels > $max_megapixels;
 	}
 
 	/**

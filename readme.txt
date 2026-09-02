@@ -61,5 +61,16 @@ a imagem original é enviada normalmente, sem conversão.
 
 == Changelog ==
 
+= 1.0.7 =
+* Correção: batch de conversão deixava de causar erro 500 em VPS. Imagens
+  muito grandes (acima de 24 megapixels por padrão) são puladas e marcadas
+  como erro em vez de esgotar a memória do PHP.
+* Batch agora eleva memory_limit (wp_raise_memory_limit), trata subpastas
+  sem permissão de leitura sem abortar, e não refaz a varredura completa do
+  disco a cada tick (só ao final).
+* BATCH_SIZE reduzido para 3, pausa entre ticks e trava contra requisições
+  sobrepostas. Falha de conversão agora retorna mensagem clara e a fila
+  continua do próximo arquivo.
+
 = 1.0.0 =
 * Versão inicial.
