@@ -334,11 +334,75 @@ class TKMO_Hooks {
 			return $html;
 		}
 
+		$wrapped = $this->rewrite_image_preload_links( $wrapped );
+
 		if ( ! empty( $placeholders ) ) {
 			$wrapped = strtr( $wrapped, $placeholders );
 		}
 
 		return $wrapped;
+	}
+
+	/**
+	 * Points <link rel="preload" as="image"> hints at the .webp file when one
+	 * exists, so the browser's early LCP fetch matches the image the
+	 * <picture> wrapper actually serves. Without this, a theme that preloads
+	 * "hero.jpg" downloads bytes the page never uses and the real WebP LCP
+	 * resource is discovered late.
+	 *
+	 * Only touches links that already resolve to an uploads image with a
+	 * .webp sibling; a responsive `imagesrcset` is rewritten only when every
+	 * candidate has a .webp sibling, so the browser's source selection is
+	 * never changed. Everything else is returned byte-for-byte.
+	 *
+	 * @param string $html Page HTML (already <img>-wrapped).
+	 * @return string
+	 */
+	private function rewrite_image_preload_links( $html ) {
+		if ( false === stripos( $html, 'rel="preload"' ) && false === stripos( $html, "rel='preload'" ) && false === stripos( $html, 'rel=preload' ) ) {
+			return $html;
+		}
+
+		$rewritten = preg_replace_callback(
+			'/<link\b[^>]*>/i',
+			function ( $match ) {
+				$link = $match[0];
+
+				$rel = $this->get_img_attr( $link, 'rel' );
+				$as  = $this->get_img_attr( $link, 'as' );
+
+				if ( false === stripos( $rel, 'preload' ) || 'image' !== strtolower( $as ) ) {
+					return $link;
+				}
+
+				$href = $this->get_img_attr( $link, 'href' );
+
+				if ( '' !== $href ) {
+					$webp_href = $this->url_to_webp_if_exists( $href );
+
+					if ( false !== $webp_href ) {
+						$link = str_replace( $href, $webp_href, $link );
+					}
+				}
+
+				$imagesrcset = $this->get_img_attr( $link, 'imagesrcset' );
+
+				if ( '' !== $imagesrcset ) {
+					$original_count = count( array_filter( array_map( 'trim', explode( ',', $imagesrcset ) ) ) );
+					$webp_srcset    = $this->build_webp_srcset( $imagesrcset );
+					$webp_count     = '' === $webp_srcset ? 0 : count( explode( ',', $webp_srcset ) );
+
+					if ( $webp_count === $original_count && $original_count > 0 ) {
+						$link = str_replace( $imagesrcset, $webp_srcset, $link );
+					}
+				}
+
+				return $link;
+			},
+			$html
+		);
+
+		return null === $rewritten ? $html : $rewritten;
 	}
 
 	/**

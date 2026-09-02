@@ -61,6 +61,14 @@ a imagem original é enviada normalmente, sem conversão.
 
 == Changelog ==
 
+= 1.0.9 =
+* Entrega da LCP: links `<link rel="preload" as="image">` do tema passam a
+  apontar para o `.webp` quando ele existe, alinhando o preload inicial com
+  a imagem que o `<picture>` realmente serve (antes o navegador baixava o
+  JPG/PNG do preload sem usar). `imagesrcset` responsivo só é reescrito
+  quando todos os candidatos têm `.webp`, preservando a seleção do
+  navegador. Nenhuma mudança em `<img>`/`<picture>` já tratados.
+
 = 1.0.8 =
 * Nova seção "Detalhes dos erros" no dashboard: lista cada arquivo que
   falhou na conversão com o motivo exato (imagem grande demais e suas
